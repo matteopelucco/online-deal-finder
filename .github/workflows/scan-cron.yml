@@ -1,0 +1,40 @@
+name: Vinted Scout — Scan Cron
+
+on:
+  schedule:
+    # Ogni 15 minuti
+    - cron: '*/15 * * * *'
+  # Permette di eseguire manualmente dalla UI GitHub
+  workflow_dispatch:
+
+jobs:
+  scan:
+    name: Trigger Scan
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Trigger /api/scan
+        run: |
+          RESPONSE=$(curl -s -w "\n%{http_code}" \
+            -X POST \
+            -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" \
+            -H "Content-Type: application/json" \
+            "${{ secrets.APP_URL }}/api/scan")
+
+          HTTP_CODE=$(echo "$RESPONSE" | tail -n1)
+          BODY=$(echo "$RESPONSE" | head -n-1)
+
+          echo "HTTP Status: $HTTP_CODE"
+          echo "Response: $BODY"
+
+          if [ "$HTTP_CODE" != "200" ]; then
+            echo "❌ Scan failed with status $HTTP_CODE"
+            exit 1
+          else
+            echo "✅ Scan completed successfully"
+          fi
+
+      - name: Log summary
+        if: always()
+        run: echo "Scan job finished at $(date -u)"
