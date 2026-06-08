@@ -60,54 +60,84 @@ async function getSessionCookies(country: VintedCountry): Promise<string> {
 /**
  * Rinnova i cookie di sessione per un paese facendo una GET alla homepage.
  */
+/**
+ * Segue i redirect manualmente raccogliendo i cookie da ogni step.
+ * Necessario perché Vinted imposta _vinted_XX_session nei redirect intermedi,
+ * non nell'ultima risposta — redirect:'follow' perderebbe quei cookie.
+ */
 async function refreshSessionCookies(country: VintedCountry): Promise<string> {
   const config = COUNTRY_CONFIGS[country]
-  const controller = new AbortController()
-  const timeoutId = setTimeout(() => controller.abort(), REQUEST_TIMEOUT)
+  const cookieJar: Record<string, string> = {}
+  let url = config.domain
+  let maxRedirects = 8
 
   try {
-    const response = await fetch(config.domain, {
-      method: 'GET',
-      headers: {
-        'User-Agent': USER_AGENT,
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-        'Accept-Language': 'it-IT,it;q=0.9,en-US;q=0.8,en;q=0.7',
-        'Accept-Encoding': 'gzip, deflate, br',
-        'Connection': 'keep-alive',
-      },
-      redirect: 'follow',
-      signal: controller.signal,
-    })
+    while (maxRedirects-- > 0) {
+      const controller = new AbortController()
+      const timeoutId = setTimeout(() => controller.abort(), REQUEST_TIMEOUT)
 
-    clearTimeout(timeoutId)
+      const cookieHeader = Object.entries(cookieJar).map(([k, v]) => `${k}=${v}`).join('; ')
 
-    const setCookieHeaders = response.headers.getSetCookie?.() ?? []
-    const cookies = setCookieHeaders
-      .map(c => c.split(';')[0])
-      .join('; ')
+      const response = await fetch(url, {
+        method: 'GET',
+        headers: {
+          'User-Agent': USER_AGENT,
+          'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+          'Accept-Language': 'it-IT,it;q=0.9,en-US;q=0.8,en;q=0.7',
+          'Connection': 'keep-alive',
+          ...(cookieHeader ? { 'Cookie': cookieHeader } : {}),
+        },
+        redirect: 'manual',
+        signal: controller.signal,
+      })
 
-    if (!cookies) {
-      // Nessun cookie ottenuto: procediamo senza (l'API pubblica di Vinted non richiede sessione)
-      return ''
+      clearTimeout(timeoutId)
+
+      // Raccogli cookie da questa risposta
+      const setCookieHeaders = response.headers.getSetCookie?.() ?? []
+      for (const raw of setCookieHeaders) {
+        const [nameValue] = raw.split(';')
+        const eqIdx = nameValue.indexOf('=')
+        if (eqIdx > 0) {
+          const name = nameValue.slice(0, eqIdx).trim()
+          const value = nameValue.slice(eqIdx + 1).trim()
+          cookieJar[name] = value
+        }
+      }
+
+      // Segui redirect
+      if (response.status >= 300 && response.status < 400) {
+        const location = response.headers.get('location')
+        if (location) {
+          url = location.startsWith('http') ? location : `${config.domain}${location}`
+          continue
+        }
+      }
+
+      // Risposta finale
+      break
     }
 
-    const expiresAt = new Date(Date.now() + 3600 * 1000)
-    const supabase = createClient()
-    await supabase
-      .from('vinted_sessions')
-      .upsert({
-        country,
-        cookies,
-        updated_at: new Date().toISOString(),
-        expires_at: expiresAt.toISOString(),
-      }, { onConflict: 'country' })
+    const cookies = Object.entries(cookieJar).map(([k, v]) => `${k}=${v}`).join('; ')
 
-    cookieCache.set(country, { cookies, expires: expiresAt.getTime() })
+    if (cookies) {
+      const expiresAt = new Date(Date.now() + 3600 * 1000)
+      try {
+        const supabase = createClient()
+        await supabase.from('vinted_sessions').upsert({
+          country,
+          cookies,
+          updated_at: new Date().toISOString(),
+          expires_at: expiresAt.toISOString(),
+        }, { onConflict: 'country' })
+      } catch { /* RLS blocca scrittura — ok, usiamo solo la cache in-memory */ }
+
+      cookieCache.set(country, { cookies, expires: Date.now() + 3600 * 1000 })
+    }
+
     return cookies
 
   } catch (err) {
-    clearTimeout(timeoutId)
-    // Non fatale: logghiamo e proviamo senza cookie
     console.warn(`Cookie refresh failed for ${country}:`, err)
     return ''
   }
