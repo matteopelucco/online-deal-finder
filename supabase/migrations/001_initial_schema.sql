@@ -182,24 +182,33 @@ ALTER TABLE public.seen_listings ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.alerts ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.vinted_sessions ENABLE ROW LEVEL SECURITY;
 
+-- Funzione helper: SECURITY DEFINER bypassa RLS su profiles,
+-- evitando la ricorsione infinita nelle policy delle altre tabelle.
+CREATE OR REPLACE FUNCTION public.is_admin()
+RETURNS boolean
+LANGUAGE sql
+SECURITY DEFINER
+STABLE
+AS $$
+  SELECT EXISTS (
+    SELECT 1 FROM public.profiles
+    WHERE id = auth.uid() AND role = 'admin'
+  );
+$$;
+
 -- Profiles: utente vede solo il proprio profilo; admin vede tutti
 CREATE POLICY "profiles_self_read" ON public.profiles
   FOR SELECT USING (auth.uid() = id);
 
 CREATE POLICY "profiles_admin_read" ON public.profiles
-  FOR SELECT USING (
-    EXISTS (SELECT 1 FROM public.profiles WHERE id = auth.uid() AND role = 'admin')
-  );
+  FOR SELECT USING (public.is_admin());
 
 CREATE POLICY "profiles_self_update" ON public.profiles
   FOR UPDATE USING (auth.uid() = id);
 
 -- Tasks: utente gestisce solo i propri; admin gestisce tutti
 CREATE POLICY "tasks_own" ON public.tasks
-  FOR ALL USING (
-    user_id = auth.uid() OR
-    EXISTS (SELECT 1 FROM public.profiles WHERE id = auth.uid() AND role = 'admin')
-  );
+  FOR ALL USING (user_id = auth.uid() OR public.is_admin());
 
 -- Seen listings: seguono i permessi del task
 CREATE POLICY "seen_listings_own" ON public.seen_listings
@@ -207,17 +216,13 @@ CREATE POLICY "seen_listings_own" ON public.seen_listings
     EXISTS (
       SELECT 1 FROM public.tasks
       WHERE tasks.id = seen_listings.task_id
-      AND (tasks.user_id = auth.uid() OR
-           EXISTS (SELECT 1 FROM public.profiles WHERE id = auth.uid() AND role = 'admin'))
+      AND (tasks.user_id = auth.uid() OR public.is_admin())
     )
   );
 
 -- Alerts: utente vede solo i propri; admin vede tutti
 CREATE POLICY "alerts_own" ON public.alerts
-  FOR ALL USING (
-    user_id = auth.uid() OR
-    EXISTS (SELECT 1 FROM public.profiles WHERE id = auth.uid() AND role = 'admin')
-  );
+  FOR ALL USING (user_id = auth.uid() OR public.is_admin());
 
 -- Vinted sessions: solo service role (no accesso utente diretto)
 CREATE POLICY "vinted_sessions_service_only" ON public.vinted_sessions
