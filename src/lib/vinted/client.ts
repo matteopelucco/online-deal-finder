@@ -37,20 +37,23 @@ async function getSessionCookies(country: VintedCountry): Promise<string> {
     return cached.cookies
   }
 
-  // Cerca in DB
-  const supabase = createClient()
-  const { data } = await supabase
-    .from('vinted_sessions')
-    .select('cookies, expires_at')
-    .eq('country', country)
-    .single()
+  // Cerca in DB (può fallire per RLS — non fatale)
+  try {
+    const supabase = createClient()
+    const { data } = await supabase
+      .from('vinted_sessions')
+      .select('cookies, expires_at')
+      .eq('country', country)
+      .single()
 
-  if (data && data.expires_at && new Date(data.expires_at).getTime() > now) {
-    cookieCache.set(country, { cookies: data.cookies, expires: new Date(data.expires_at).getTime() })
-    return data.cookies
+    if (data && data.expires_at && new Date(data.expires_at).getTime() > now) {
+      cookieCache.set(country, { cookies: data.cookies, expires: new Date(data.expires_at).getTime() })
+      return data.cookies
+    }
+  } catch {
+    // Ignora errori DB per vinted_sessions (RLS blocca accesso utente normale)
   }
 
-  // Rinnova i cookie
   return await refreshSessionCookies(country)
 }
 
@@ -78,18 +81,17 @@ async function refreshSessionCookies(country: VintedCountry): Promise<string> {
 
     clearTimeout(timeoutId)
 
-    // Estrai cookie dai header di risposta
     const setCookieHeaders = response.headers.getSetCookie?.() ?? []
     const cookies = setCookieHeaders
       .map(c => c.split(';')[0])
       .join('; ')
 
     if (!cookies) {
-      throw new Error(`Impossibile ottenere cookie per ${country}`)
+      // Nessun cookie ottenuto: procediamo senza (l'API pubblica di Vinted non richiede sessione)
+      return ''
     }
 
-    // Salva in DB e in cache
-    const expiresAt = new Date(Date.now() + 3600 * 1000) // 1 ora
+    const expiresAt = new Date(Date.now() + 3600 * 1000)
     const supabase = createClient()
     await supabase
       .from('vinted_sessions')
@@ -101,12 +103,13 @@ async function refreshSessionCookies(country: VintedCountry): Promise<string> {
       }, { onConflict: 'country' })
 
     cookieCache.set(country, { cookies, expires: expiresAt.getTime() })
-
     return cookies
 
   } catch (err) {
     clearTimeout(timeoutId)
-    throw new Error(`Errore refresh cookie per ${country}: ${err}`)
+    // Non fatale: logghiamo e proviamo senza cookie
+    console.warn(`Cookie refresh failed for ${country}:`, err)
+    return ''
   }
 }
 
@@ -121,7 +124,6 @@ export async function searchVinted(
   const config = COUNTRY_CONFIGS[country]
   const cookies = await getSessionCookies(country)
 
-  // Costruisci URL di ricerca
   const searchParams = new URLSearchParams({
     search_text: params.search_text,
     order: params.order ?? 'newest_first',
@@ -133,37 +135,41 @@ export async function searchVinted(
 
   const url = `${config.domain}/api/v2/catalog/items?${searchParams}`
 
+  const requestHeaders: Record<string, string> = {
+    'User-Agent': USER_AGENT,
+    'Accept': 'application/json, text/plain, */*',
+    'Accept-Language': 'it-IT,it;q=0.9',
+    'Referer': config.domain,
+    'X-Requested-With': 'XMLHttpRequest',
+  }
+  // Includi Cookie solo se non vuoto: passare Cookie:'' causa 401 su Vinted
+  if (cookies) {
+    requestHeaders['Cookie'] = cookies
+  }
+
   const controller = new AbortController()
   const timeoutId = setTimeout(() => controller.abort(), REQUEST_TIMEOUT)
 
   try {
     const response = await fetch(url, {
       method: 'GET',
-      headers: {
-        'User-Agent': USER_AGENT,
-        'Accept': 'application/json, text/plain, */*',
-        'Accept-Language': 'it-IT,it;q=0.9',
-        'Cookie': cookies,
-        'Referer': config.domain,
-        'X-Requested-With': 'XMLHttpRequest',
-      },
+      headers: requestHeaders,
       signal: controller.signal,
     })
 
     clearTimeout(timeoutId)
 
     if (response.status === 401 || response.status === 403) {
-      // Cookie scaduti, invalida cache e riprova
       cookieCache.delete(country)
       if (retries > 0) {
         await delay(1000)
         return searchVinted(country, params, retries - 1)
       }
-      throw new Error(`Autenticazione Vinted fallita per ${country}`)
+      throw new Error(`HTTP ${response.status} da Vinted per ${country} — possibile blocco IP o rate limit`)
     }
 
     if (!response.ok) {
-      throw new Error(`Vinted API error ${response.status} per ${country}`)
+      throw new Error(`Vinted API HTTP ${response.status} per ${country}`)
     }
 
     const json = await response.json()
@@ -171,7 +177,7 @@ export async function searchVinted(
 
   } catch (err) {
     clearTimeout(timeoutId)
-    if (retries > 0 && !(err instanceof Error && err.message.includes('Autenticazione'))) {
+    if (retries > 0 && !(err instanceof Error && err.message.startsWith('HTTP'))) {
       await delay(REQUEST_DELAY * 2)
       return searchVinted(country, params, retries - 1)
     }
