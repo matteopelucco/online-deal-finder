@@ -4,7 +4,7 @@ import { rateLimitedSearch } from '@/lib/vinted/client'
 import { analyzeListing } from '@/lib/ai/analyzer'
 import { sendAlert } from '@/lib/notifications/telegram'
 import { COUNTRY_CONFIGS } from '@/lib/vinted/countries'
-import type { Task, ScanSummary, VintedCountry, Alert, CountryLog } from '@/types'
+import type { Task, ScanSummary, VintedCountry, Alert, CountryLog, ListingDetail } from '@/types'
 
 export async function POST(
   _request: NextRequest,
@@ -107,17 +107,47 @@ async function processTask(task: Task, supabase: any, summary: ScanSummary, logs
           )
       }
 
+      // Pre-filtra per qualità venditore (per alert reali)
       const qualifiedListings = newListings.filter(listing =>
         listing.user.feedback_reputation >= task.min_seller_rating &&
         listing.user.feedback_count >= task.min_seller_reviews
       )
       log.listings_qualified = qualifiedListings.length
+      log.listings = []
 
-      for (const listing of qualifiedListings) {
+      // Analisi AI su TUTTI i listing nuovi (qualificati e non) per il log di debug
+      for (const listing of newListings) {
         summary.listings_analyzed++
         log.listings_analyzed++
 
+        const isQualified = qualifiedListings.includes(listing)
+        let filterReason: string | undefined
+        if (!isQualified) {
+          if (listing.user.feedback_reputation < task.min_seller_rating) {
+            filterReason = `rating ${listing.user.feedback_reputation.toFixed(1)} < ${task.min_seller_rating}`
+          } else {
+            filterReason = `recensioni ${listing.user.feedback_count} < ${task.min_seller_reviews}`
+          }
+        }
+
         const analysis = await analyzeListing(listing, task)
+
+        const detail: ListingDetail = {
+          id: listing.id,
+          title: listing.title,
+          price: listing.price,
+          url: listing.url,
+          seller_rating: listing.user.feedback_reputation,
+          seller_reviews: listing.user.feedback_count,
+          passed_filter: isQualified,
+          filter_reason: filterReason,
+          ai_score: analysis.score,
+          ai_investment_value: analysis.investment_value,
+        }
+        log.listings.push(detail)
+
+        // Crea alert solo per i listing qualificati con score sufficiente
+        if (!isQualified) continue
         if (analysis.score < task.ai_score_threshold || analysis.investment_value === 'skip') continue
 
         const alertData = {

@@ -142,6 +142,19 @@ export interface ScanSummary {
   duration_ms: number
 }
 
+export interface ListingDetail {
+  id: string
+  title: string
+  price: string
+  url: string
+  seller_rating: number
+  seller_reviews: number
+  passed_filter: boolean
+  filter_reason?: string
+  ai_score?: number
+  ai_investment_value?: InvestmentValue
+}
+
 export interface CountryLog {
   country: string
   flag: string
@@ -153,6 +166,7 @@ export interface CountryLog {
   alerts_created: number
   error?: string
   duration_ms: number
+  listings?: ListingDetail[]
 }
 
 // ---- API Response types ----
