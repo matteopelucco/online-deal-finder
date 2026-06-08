@@ -1,4 +1,4 @@
-name: Vinted Scout — Scan Cron
+name: Online Deal Finder — Scan Cron
 
 on:
   schedule:

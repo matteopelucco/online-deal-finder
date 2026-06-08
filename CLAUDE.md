@@ -1,8 +1,8 @@
-# CLAUDE.md — Vinted Scout: Specifiche per Claude Code
+# CLAUDE.md — Online Deal Finder: Specifiche per Claude Code
 
 ## Panoramica Progetto
 
-**Vinted Scout** è un'applicazione Next.js che monitora Vinted in modo avanzato, usando AI per valutare oggetti di interesse e notificando l'utente via Telegram.
+**Online Deal Finder** è un'applicazione Next.js che monitora Vinted in modo avanzato, usando AI per valutare oggetti di interesse e notificando l'utente via Telegram.
 
 Stack: Next.js 14 (App Router) · TypeScript · Supabase · Vercel · Claude API (Haiku) · Telegram Bot API
 

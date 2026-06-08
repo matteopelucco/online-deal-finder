@@ -1,5 +1,5 @@
 // ============================================================
-// Vinted Scout — Tipi globali
+// Online Deal Finder — Tipi globali
 // ============================================================
 
 export type UserRole = 'admin' | 'user'

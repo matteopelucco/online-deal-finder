@@ -163,12 +163,12 @@ async function sendPhoto(
  * Invia un messaggio di test per verificare la connessione
  */
 export async function sendTestMessage(chatId: string): Promise<TelegramSendResult> {
-  return sendMessage(chatId, '✅ <b>Vinted Scout</b>\n\nConnessione Telegram verificata con successo! Riceverai gli alert qui.')
+  return sendMessage(chatId, '✅ <b>Online Deal Finder</b>\n\nConnessione Telegram verificata con successo! Riceverai gli alert qui.')
 }
 
 /**
  * Invia codice di verifica per collegare l'account Telegram
  */
 export async function sendVerificationCode(chatId: string, code: string): Promise<TelegramSendResult> {
-  return sendMessage(chatId, `🔐 <b>Vinted Scout — Codice di verifica</b>\n\nIl tuo codice è: <code>${code}</code>\n\nInseriscilo nell'app per completare la connessione.\n(Scade tra 10 minuti)`)
+  return sendMessage(chatId, `🔐 <b>Online Deal Finder — Codice di verifica</b>\n\nIl tuo codice è: <code>${code}</code>\n\nInseriscilo nell'app per completare la connessione.\n(Scade tra 10 minuti)`)
 }

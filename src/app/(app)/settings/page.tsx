@@ -4,7 +4,7 @@ import SettingsForm from './SettingsForm'
 import type { Profile } from '@/types'
 
 export const metadata = {
-  title: 'Impostazioni — Vinted Scout',
+  title: 'Impostazioni — Online Deal Finder',
 }
 
 export default async function SettingsPage() {

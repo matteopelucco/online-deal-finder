@@ -5,8 +5,8 @@ import './globals.css'
 const inter = Inter({ subsets: ['latin'] })
 
 export const metadata: Metadata = {
-  title: 'Vinted Scout',
-  description: 'Monitoraggio intelligente Vinted con analisi AI',
+  title: 'Online Deal Finder',
+  description: 'Monitoraggio intelligente - si spera - di oggetti su vari shop (Vinted, Subito, ..) con analisi AI',
 }
 
 export default function RootLayout({

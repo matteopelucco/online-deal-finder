@@ -1,5 +1,5 @@
 -- ============================================================
--- Vinted Scout — Schema iniziale
+-- Online Deal Finder — Schema iniziale
 -- Eseguire con: npx supabase db push
 -- ============================================================
 

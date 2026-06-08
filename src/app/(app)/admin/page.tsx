@@ -4,7 +4,7 @@ import { Badge } from '@/components/ui/badge'
 import type { Profile } from '@/types'
 
 export const metadata = {
-  title: 'Admin — Vinted Scout',
+  title: 'Admin — Online Deal Finder',
 }
 
 async function getAllUsers(): Promise<Profile[]> {

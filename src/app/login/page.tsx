@@ -2,7 +2,7 @@ import { Suspense } from 'react'
 import LoginForm from './LoginForm'
 
 export const metadata = {
-  title: 'Login — Vinted Scout',
+  title: 'Login — Online Deal Finder',
 }
 
 export default function LoginPage() {

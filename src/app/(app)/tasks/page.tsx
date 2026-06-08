@@ -6,7 +6,7 @@ import TaskCard from '@/components/tasks/TaskCard'
 import type { Task } from '@/types'
 
 export const metadata = {
-  title: 'Task — Vinted Scout',
+  title: 'Task — Online Deal Finder',
 }
 
 async function getTasks(userId: string): Promise<Task[]> {

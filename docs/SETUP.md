@@ -1,4 +1,4 @@
-# Vinted Scout — Guida Setup Completa
+# Online Deal Finder — Guida Setup Completa
 
 ## Prerequisiti
 
@@ -51,7 +51,7 @@ WHERE email = 'tua@email.com';
 
 1. Apri Telegram, cerca `@BotFather`
 2. Invia `/newbot`
-3. Scegli un nome (es: "Vinted Scout")
+3. Scegli un nome (es: "Online Deal Finder")
 4. Scegli uno username (es: `vinted_scout_bot`)
 5. Copia il **BOT_TOKEN** che ti viene dato
 6. Copia `TELEGRAM_BOT_TOKEN` in `.env.local`
@@ -110,7 +110,7 @@ curl -X POST http://localhost:3000/api/scan \
 4. Il cron partirà automaticamente ogni 15 minuti
 
 ### Test manuale del cron
-Actions → "Vinted Scout — Scan Cron" → Run workflow
+Actions → "Online Deal Finder — Scan Cron" → Run workflow
 
 ---
 

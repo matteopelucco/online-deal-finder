@@ -37,7 +37,7 @@ export default function Sidebar({ isAdmin, userEmail }: SidebarProps) {
       <div className="p-5 border-b border-gray-800">
         <div className="flex items-center gap-2">
           <Radar size={20} className="text-green-400" />
-          <span className="font-bold text-white">Vinted Scout</span>
+          <span className="font-bold text-white">Online Deal Finder</span>
         </div>
         <p className="text-xs text-gray-600 mt-1 ml-7">Monitoraggio AI</p>
       </div>
