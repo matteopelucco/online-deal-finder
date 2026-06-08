@@ -1,134 +1,216 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { useRouter } from 'next/navigation'
-import { Play, Pause, Trash2, ScanLine, Loader2, CheckCircle2, XCircle, ChevronDown, ChevronUp, ExternalLink } from 'lucide-react'
+import {
+  Play, Pause, Trash2, ScanLine, Loader2,
+  ChevronDown, ChevronUp, ExternalLink, Clock,
+} from 'lucide-react'
 import { Card, CardContent } from '@/components/ui/card'
 import { Badge, scoreVariant } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import type { Task, CountryLog } from '@/types'
+import type { Task, ListingDetail } from '@/types'
+import type { ScanEvent } from '@/app/api/tasks/[id]/scan/route'
 
-interface TaskCardProps {
-  task: Task
+interface TaskCardProps { task: Task }
+
+// ---- Countdown timer ----
+function useCountdown(lastScanAt: string | null, intervalMinutes: number) {
+  const [display, setDisplay] = useState<{ label: string; urgent: boolean }>({ label: '', urgent: false })
+
+  useEffect(() => {
+    if (!lastScanAt) { setDisplay({ label: 'Prossimo: ora', urgent: true }); return }
+
+    const nextMs = new Date(lastScanAt).getTime() + intervalMinutes * 60 * 1000
+
+    function tick() {
+      const diff = nextMs - Date.now()
+      if (diff <= 0) { setDisplay({ label: 'Prossimo: ora', urgent: true }); return }
+      const m = Math.floor(diff / 60000)
+      const s = Math.floor((diff % 60000) / 1000)
+      setDisplay({ label: `Prossimo: ${m}:${s.toString().padStart(2, '0')}`, urgent: m < 2 })
+    }
+
+    tick()
+    const id = setInterval(tick, 1000)
+    return () => clearInterval(id)
+  }, [lastScanAt, intervalMinutes])
+
+  return display
 }
 
-interface ScanDetail {
-  ok: boolean
-  duration_ms: number
-  logs: CountryLog[]
-  topError?: string
-}
+// ---- Live log line rendering ----
+interface LogLine { ts: number; event: ScanEvent }
 
-function investmentColor(val?: string) {
-  if (val === 'high') return 'text-green-400'
-  if (val === 'medium') return 'text-yellow-400'
-  if (val === 'low') return 'text-red-400'
-  return 'text-gray-500'
-}
+function renderLine(e: ScanEvent, idx: number) {
+  switch (e.type) {
+    case 'start':
+      return <div key={idx} className="text-green-400 font-medium">▶ Avvio scan "{e.task_name}" — paesi: {e.countries.map(c => c.toUpperCase()).join(', ')}</div>
 
-function CountryLogRow({ log }: { log: CountryLog }) {
-  const [expanded, setExpanded] = useState(false)
-  const hasListings = (log.listings?.length ?? 0) > 0
+    case 'step': {
+      const color = e.level === 'error' ? 'text-red-400' : e.level === 'success' ? 'text-green-400' : e.level === 'warn' ? 'text-yellow-400' : 'text-gray-400'
+      return <div key={idx} className={color}>{e.message}</div>
+    }
 
-  return (
-    <div>
-      <div className="px-3 py-2 flex items-start gap-2">
-        <span className="shrink-0 mt-0.5">{log.flag}</span>
-        <span className="text-gray-400 w-6 shrink-0">{log.country.toUpperCase()}</span>
+    case 'country_start':
+      return <div key={idx} className="text-blue-400 font-medium mt-1">{e.flag} {e.country.toUpperCase()} ─────────────────</div>
 
-        {log.status === 'error' ? (
-          <span className="text-red-400 flex-1">{log.error}</span>
-        ) : (
-          <span className="text-gray-500 flex-1 space-x-2">
-            <span className={log.listings_found === 0 ? 'text-yellow-600' : 'text-gray-400'}>
-              {log.listings_found} trovati
-            </span>
-            <span>·</span>
-            <span>{log.listings_new} nuovi</span>
-            <span>·</span>
-            <span>{log.listings_qualified} qualificati</span>
-            <span>·</span>
-            <span className={log.alerts_created > 0 ? 'text-green-400 font-medium' : ''}>
-              {log.alerts_created} alert
-            </span>
-          </span>
-        )}
-
-        <div className="flex items-center gap-2 shrink-0">
-          <span className="text-gray-700">{log.duration_ms}ms</span>
-          {hasListings && (
-            <button
-              onClick={() => setExpanded(e => !e)}
-              className="text-gray-500 hover:text-gray-300 transition-colors"
-            >
-              {expanded ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
-            </button>
-          )}
-        </div>
+    case 'vinted_result':
+      return <div key={idx} className={`font-medium ${e.found === 0 ? 'text-yellow-500' : 'text-gray-200'}`}>
+        📦 {e.found} trovati · {e.new_count} nuovi
       </div>
 
-      {expanded && hasListings && (
-        <div className="border-t border-gray-800/60 bg-gray-900/50">
-          {/* Intestazione colonne */}
-          <div className="grid grid-cols-[1fr_auto_auto_auto_auto] gap-x-3 px-3 py-1.5 text-gray-600 font-medium border-b border-gray-800/40"
-               style={{ fontSize: '10px', letterSpacing: '0.05em' }}>
-            <span>TITOLO</span>
-            <span className="text-right">PREZZO</span>
-            <span className="text-right">SELLER</span>
-            <span className="text-right">FILTRO</span>
-            <span className="text-right">SCORE</span>
-          </div>
+    case 'listing': {
+      const d = e.detail
+      const scoreEl = d.ai_score !== undefined
+        ? <Badge variant={scoreVariant(d.ai_score)} className="text-[10px] px-1 py-0 ml-1">{d.ai_score}</Badge>
+        : null
+      return (
+        <div key={idx} className="flex items-center gap-1 ml-2 flex-wrap">
+          <span className={d.passed_filter ? 'text-green-500' : 'text-red-500'}>{d.passed_filter ? '✓' : '✗'}</span>
+          <a href={d.url} target="_blank" rel="noopener noreferrer"
+            className="text-gray-300 hover:text-white truncate max-w-[280px]">{d.title}</a>
+          <span className="text-gray-500">€{parseFloat(d.price).toFixed(0)}</span>
+          <span className="text-gray-600">⭐{d.seller_rating.toFixed(1)}({d.seller_reviews})</span>
+          {!d.passed_filter && <span className="text-red-700 text-[10px]">[{d.filter_reason}]</span>}
+          {scoreEl}
+        </div>
+      )
+    }
 
-          <div className="divide-y divide-gray-800/30 max-h-72 overflow-y-auto">
-            {log.listings!.map(item => (
-              <div key={item.id}
-                   className="grid grid-cols-[1fr_auto_auto_auto_auto] gap-x-3 px-3 py-1.5 items-center hover:bg-gray-800/30 transition-colors">
-                <a
-                  href={item.url}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="text-gray-300 hover:text-white truncate flex items-center gap-1 min-w-0"
-                  style={{ fontSize: '11px' }}
-                >
-                  <span className="truncate">{item.title}</span>
-                  <ExternalLink size={10} className="shrink-0 text-gray-600" />
-                </a>
-                <span className="text-gray-400 text-right tabular-nums" style={{ fontSize: '11px' }}>
-                  €{parseFloat(item.price).toFixed(0)}
-                </span>
-                <span className="text-gray-500 text-right tabular-nums" style={{ fontSize: '11px' }}>
-                  ⭐{item.seller_rating.toFixed(1)} ({item.seller_reviews})
-                </span>
-                <span style={{ fontSize: '10px' }} className={item.passed_filter ? 'text-green-500 text-right' : 'text-red-500 text-right'} title={item.filter_reason}>
-                  {item.passed_filter ? '✓' : `✗ ${item.filter_reason ?? ''}`}
-                </span>
-                <span className="text-right">
-                  {item.ai_score !== undefined ? (
-                    <Badge variant={scoreVariant(item.ai_score)} className="text-[10px] px-1.5 py-0">
-                      {item.ai_score}
-                      {item.ai_investment_value && (
-                        <span className={`ml-1 ${investmentColor(item.ai_investment_value)}`}>
-                          {item.ai_investment_value[0].toUpperCase()}
-                        </span>
-                      )}
-                    </Badge>
-                  ) : (
-                    <span className="text-gray-700 text-[10px]">—</span>
-                  )}
-                </span>
-              </div>
-            ))}
+    case 'country_done':
+      return <div key={idx} className="text-gray-500 text-xs mt-0.5">
+        ✓ {e.country.toUpperCase()} completato in {(e.duration_ms / 1000).toFixed(1)}s — {e.alerts} alert creati
+      </div>
+
+    case 'done':
+      return <div key={idx} className="text-green-400 font-medium mt-1 border-t border-gray-800 pt-1">
+        ✅ Scan completato in {(e.duration_ms / 1000).toFixed(1)}s — {e.total_alerts} alert totali
+        {e.errors.length > 0 && <span className="text-red-400"> · {e.errors.length} errori</span>}
+      </div>
+
+    case 'error':
+      return <div key={idx} className="text-red-400 font-medium">❌ {e.message}</div>
+
+    default:
+      return null
+  }
+}
+
+// ---- Per-country listing table ----
+function ListingsTable({ listings }: { listings: ListingDetail[] }) {
+  const [open, setOpen] = useState(false)
+  if (!listings.length) return null
+
+  return (
+    <div className="mt-1 border-t border-gray-800/60">
+      <button
+        onClick={() => setOpen(o => !o)}
+        className="flex items-center gap-1 px-3 py-1.5 text-xs text-gray-500 hover:text-gray-300 transition-colors w-full"
+      >
+        {open ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
+        {open ? 'Nascondi' : `Mostra`} {listings.length} listing
+      </button>
+
+      {open && (
+        <div className="max-h-64 overflow-y-auto">
+          <div className="grid px-3 py-1 text-gray-600 font-medium border-b border-gray-800/40"
+            style={{ fontSize: '10px', gridTemplateColumns: '1fr 48px 80px 24px 36px' }}>
+            <span>TITOLO</span><span className="text-right">€</span>
+            <span className="text-right">SELLER</span>
+            <span className="text-right">OK</span>
+            <span className="text-right">AI</span>
           </div>
+          {listings.map(item => (
+            <div key={item.id}
+              className="grid px-3 py-1 items-center hover:bg-gray-800/30 border-b border-gray-800/20"
+              style={{ fontSize: '11px', gridTemplateColumns: '1fr 48px 80px 24px 36px' }}>
+              <a href={item.url} target="_blank" rel="noopener noreferrer"
+                className="text-gray-300 hover:text-white truncate flex items-center gap-1 min-w-0">
+                <span className="truncate">{item.title}</span>
+                <ExternalLink size={9} className="shrink-0 text-gray-600" />
+              </a>
+              <span className="text-gray-400 text-right tabular-nums">{parseFloat(item.price).toFixed(0)}</span>
+              <span className="text-gray-500 text-right tabular-nums text-[10px]"
+                title={item.filter_reason}>
+                ⭐{item.seller_rating.toFixed(1)}({item.seller_reviews})
+              </span>
+              <span className={`text-right text-[11px] ${item.passed_filter ? 'text-green-500' : 'text-red-500'}`}>
+                {item.passed_filter ? '✓' : '✗'}
+              </span>
+              <span className="text-right">
+                {item.ai_score !== undefined
+                  ? <Badge variant={scoreVariant(item.ai_score)} className="text-[10px] px-1 py-0">{item.ai_score}</Badge>
+                  : <span className="text-gray-700">—</span>}
+              </span>
+            </div>
+          ))}
         </div>
       )}
     </div>
   )
 }
 
+// ---- Main component ----
 export default function TaskCard({ task }: TaskCardProps) {
   const router = useRouter()
-  const [loading, setLoading] = useState<'toggle' | 'delete' | 'scan' | null>(null)
-  const [scanDetail, setScanDetail] = useState<ScanDetail | null>(null)
+  const [loading, setLoading] = useState<'toggle' | 'delete' | null>(null)
+  const [scanning, setScanning] = useState(false)
+  const [liveLog, setLiveLog] = useState<ScanEvent[]>([])
+  const [listings, setListings] = useState<ListingDetail[]>([])
+  const [scanDone, setScanDone] = useState(false)
+  const logEndRef = useRef<HTMLDivElement>(null)
+  const countdown = useCountdown(task.last_scan_at, task.scan_interval_minutes)
+
+  // Auto-scroll log to bottom
+  useEffect(() => {
+    logEndRef.current?.scrollIntoView({ behavior: 'smooth' })
+  }, [liveLog])
+
+  async function handleScan() {
+    setScanning(true)
+    setScanDone(false)
+    setLiveLog([])
+    setListings([])
+
+    try {
+      const res = await fetch(`/api/tasks/${task.id}/scan`, { method: 'POST' })
+      if (!res.ok || !res.body) {
+        setLiveLog([{ type: 'error', message: `HTTP ${res.status}` }])
+        return
+      }
+
+      const reader = res.body.getReader()
+      const decoder = new TextDecoder()
+      let buffer = ''
+
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+
+        buffer += decoder.decode(value, { stream: true })
+        const parts = buffer.split('\n\n')
+        buffer = parts.pop() ?? ''
+
+        for (const part of parts) {
+          if (!part.startsWith('data: ')) continue
+          try {
+            const event: ScanEvent = JSON.parse(part.slice(6))
+            setLiveLog(prev => [...prev, event])
+            if (event.type === 'listing') {
+              setListings(prev => [...prev, event.detail])
+            }
+            if (event.type === 'done') {
+              setScanDone(true)
+              router.refresh()
+            }
+          } catch { /* malformed event */ }
+        }
+      }
+    } finally {
+      setScanning(false)
+    }
+  }
 
   async function handleToggle() {
     setLoading('toggle')
@@ -139,9 +221,7 @@ export default function TaskCard({ task }: TaskCardProps) {
         body: JSON.stringify({ is_active: !task.is_active }),
       })
       router.refresh()
-    } finally {
-      setLoading(null)
-    }
+    } finally { setLoading(null) }
   }
 
   async function handleDelete() {
@@ -150,33 +230,7 @@ export default function TaskCard({ task }: TaskCardProps) {
     try {
       await fetch(`/api/tasks/${task.id}`, { method: 'DELETE' })
       router.refresh()
-    } finally {
-      setLoading(null)
-    }
-  }
-
-  async function handleScan() {
-    setLoading('scan')
-    setScanDetail(null)
-    try {
-      const res = await fetch(`/api/tasks/${task.id}/scan`, { method: 'POST' })
-      const json = await res.json()
-      if (res.ok) {
-        setScanDetail({
-          ok: true,
-          duration_ms: json.summary?.duration_ms ?? 0,
-          logs: json.logs ?? [],
-          topError: json.summary?.errors?.[0],
-        })
-        router.refresh()
-      } else {
-        setScanDetail({ ok: false, duration_ms: 0, logs: [], topError: json.error })
-      }
-    } catch (err) {
-      setScanDetail({ ok: false, duration_ms: 0, logs: [], topError: String(err) })
-    } finally {
-      setLoading(null)
-    }
+    } finally { setLoading(null) }
   }
 
   const lastScan = task.last_scan_at
@@ -203,93 +257,51 @@ export default function TaskCard({ task }: TaskCardProps) {
             </p>
           </div>
 
-          <div className="text-right text-xs text-gray-600 shrink-0">
-            <p className="text-gray-400">{task.total_alerts} alert</p>
-            <p>{task.total_scans} scan</p>
-            <p className="mt-1">Ultimo: {lastScan}</p>
+          <div className="text-right text-xs shrink-0 space-y-0.5">
+            <p className="text-gray-400">{task.total_alerts} alert · {task.total_scans} scan</p>
+            <p className="text-gray-600">Ultimo: {lastScan}</p>
+            {task.is_active && countdown.label && (
+              <p className={`flex items-center justify-end gap-1 ${countdown.urgent ? 'text-green-400' : 'text-gray-500'}`}>
+                <Clock size={10} />
+                {countdown.label}
+              </p>
+            )}
           </div>
         </div>
 
-        {/* Scan log */}
-        {scanDetail && (
-          <div className="rounded-lg border border-gray-800 bg-gray-950 overflow-hidden text-xs">
-            {/* Header log */}
-            <div className={`flex items-center gap-2 px-3 py-2 border-b border-gray-800 ${
-              scanDetail.ok ? 'text-green-400' : 'text-red-400'
-            }`}>
-              {scanDetail.ok
-                ? <CheckCircle2 size={13} />
-                : <XCircle size={13} />
-              }
-              <span className="font-medium">
-                {scanDetail.ok ? 'Scan completato' : 'Scan fallito'}
+        {/* Live log */}
+        {liveLog.length > 0 && (
+          <div className="rounded-lg border border-gray-800 bg-gray-950 overflow-hidden">
+            <div className="px-3 py-2 border-b border-gray-800 flex items-center justify-between">
+              <span className="text-xs font-medium text-gray-400">
+                {scanning ? <span className="flex items-center gap-1.5"><Loader2 size={11} className="animate-spin" />Scan in corso…</span> : ''}
+                {scanDone ? <span className="text-green-400">✓ Completato</span> : ''}
               </span>
-              {scanDetail.duration_ms > 0 && (
-                <span className="text-gray-600 ml-auto">{(scanDetail.duration_ms / 1000).toFixed(1)}s</span>
-              )}
             </div>
-
-            {/* Errore globale */}
-            {scanDetail.topError && (
-              <div className="px-3 py-2 text-red-400 border-b border-gray-800 bg-red-500/5">
-                {scanDetail.topError}
-              </div>
-            )}
-
-            {/* Righe per paese */}
-            {scanDetail.logs.length > 0 ? (
-              <div className="divide-y divide-gray-800/60">
-                {scanDetail.logs.map(log => (
-                  <CountryLogRow key={log.country} log={log} />
-                ))}
-              </div>
-            ) : (
-              !scanDetail.topError && (
-                <div className="px-3 py-2 text-gray-600">Nessun paese scansionato.</div>
-              )
+            <div className="px-3 py-2 space-y-0.5 font-mono max-h-80 overflow-y-auto" style={{ fontSize: '11px' }}>
+              {liveLog.map((e, i) => renderLine(e, i))}
+              <div ref={logEndRef} />
+            </div>
+            {!scanning && listings.length > 0 && (
+              <ListingsTable listings={listings} />
             )}
           </div>
         )}
 
-        {/* Azioni */}
+        {/* Actions */}
         <div className="flex items-center gap-2 pt-1">
-          <Button
-            size="sm"
-            variant="ghost"
-            onClick={handleScan}
-            disabled={loading !== null}
-          >
-            {loading === 'scan'
-              ? <Loader2 size={14} className="animate-spin" />
-              : <ScanLine size={14} />
-            }
-            Scan ora
+          <Button size="sm" variant="ghost" onClick={handleScan} disabled={scanning || loading !== null}>
+            {scanning ? <Loader2 size={14} className="animate-spin" /> : <ScanLine size={14} />}
+            {scanning ? 'Scanning…' : 'Scan ora'}
           </Button>
 
-          <Button
-            size="sm"
-            variant="secondary"
-            onClick={handleToggle}
-            disabled={loading !== null}
-          >
-            {loading === 'toggle'
-              ? <Loader2 size={14} className="animate-spin" />
-              : task.is_active ? <Pause size={14} /> : <Play size={14} />
-            }
+          <Button size="sm" variant="secondary" onClick={handleToggle} disabled={scanning || loading !== null}>
+            {loading === 'toggle' ? <Loader2 size={14} className="animate-spin" /> : task.is_active ? <Pause size={14} /> : <Play size={14} />}
             {task.is_active ? 'Pausa' : 'Attiva'}
           </Button>
 
-          <Button
-            size="sm"
-            variant="danger"
-            onClick={handleDelete}
-            disabled={loading !== null}
-            className="ml-auto"
-          >
-            {loading === 'delete'
-              ? <Loader2 size={14} className="animate-spin" />
-              : <Trash2 size={14} />
-            }
+          <Button size="sm" variant="danger" onClick={handleDelete} disabled={scanning || loading !== null} className="ml-auto">
+            {loading === 'delete' ? <Loader2 size={14} className="animate-spin" /> : <Trash2 size={14} />}
             Elimina
           </Button>
         </div>

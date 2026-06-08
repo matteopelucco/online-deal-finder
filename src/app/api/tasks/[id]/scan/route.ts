@@ -1,10 +1,21 @@
-import { NextRequest, NextResponse } from 'next/server'
+import { NextRequest } from 'next/server'
 import { createClient, createAdminClient } from '@/lib/db/client'
 import { rateLimitedSearch } from '@/lib/vinted/client'
 import { analyzeListing } from '@/lib/ai/analyzer'
 import { sendAlert } from '@/lib/notifications/telegram'
 import { COUNTRY_CONFIGS } from '@/lib/vinted/countries'
-import type { Task, ScanSummary, VintedCountry, Alert, CountryLog, ListingDetail } from '@/types'
+import type { Task, VintedCountry, Alert, ListingDetail } from '@/types'
+
+// ---- Event types (shared with client via this route's response) ----
+export type ScanEvent =
+  | { type: 'start'; task_name: string; countries: string[] }
+  | { type: 'step'; level: 'info' | 'warn' | 'success' | 'error'; message: string }
+  | { type: 'country_start'; country: string; flag: string }
+  | { type: 'vinted_result'; country: string; found: number; new_count: number }
+  | { type: 'listing'; detail: ListingDetail }
+  | { type: 'country_done'; country: string; duration_ms: number; alerts: number }
+  | { type: 'done'; duration_ms: number; total_alerts: number; errors: string[] }
+  | { type: 'error'; message: string }
 
 export async function POST(
   _request: NextRequest,
@@ -12,7 +23,7 @@ export async function POST(
 ) {
   const supabase = createClient()
   const { data: { user } } = await supabase.auth.getUser()
-  if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  if (!user) return new Response('Unauthorized', { status: 401 })
 
   const { data: task, error: taskError } = await supabase
     .from('tasks')
@@ -21,195 +32,192 @@ export async function POST(
     .eq('user_id', user.id)
     .single()
 
-  if (taskError || !task) {
-    return NextResponse.json({ error: 'Task non trovato' }, { status: 404 })
-  }
+  if (taskError || !task) return new Response('Task non trovato', { status: 404 })
 
   const adminSupabase = createAdminClient()
-
-  await adminSupabase
-    .from('tasks')
-    .update({ last_scan_at: null })
-    .eq('id', params.id)
-
-  const summary: ScanSummary = {
-    tasks_scanned: 0,
-    listings_found: 0,
-    listings_new: 0,
-    listings_analyzed: 0,
-    alerts_sent: 0,
-    errors: [],
-    duration_ms: 0,
-  }
-  const logs: CountryLog[] = []
+  const encoder = new TextEncoder()
   const startTime = Date.now()
 
-  try {
-    await processTask(task as Task, adminSupabase, summary, logs)
-  } catch (err) {
-    summary.errors.push(String(err))
+  const stream = new TransformStream<Uint8Array, Uint8Array>()
+  const writer = stream.writable.getWriter()
+
+  function emit(event: ScanEvent) {
+    writer.write(encoder.encode(`data: ${JSON.stringify(event)}\n\n`))
   }
 
-  summary.duration_ms = Date.now() - startTime
-
-  return NextResponse.json({ success: true, summary, logs })
-}
-
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-async function processTask(task: Task, supabase: any, summary: ScanSummary, logs: CountryLog[]): Promise<void> {
-  summary.tasks_scanned++
-
-  const { data: seenData } = await supabase
-    .from('seen_listings')
-    .select('vinted_id, country')
-    .eq('task_id', task.id)
-
-  const seenSet = new Set(
-    (seenData ?? []).map((r: { vinted_id: string; country: string }) => `${r.country}:${r.vinted_id}`)
-  )
-
-  for (const country of task.countries as VintedCountry[]) {
-    const countryStart = Date.now()
-    const log: CountryLog = {
-      country,
-      flag: COUNTRY_CONFIGS[country]?.flag ?? '🌍',
-      status: 'ok',
-      listings_found: 0,
-      listings_new: 0,
-      listings_qualified: 0,
-      listings_analyzed: 0,
-      alerts_created: 0,
-      duration_ms: 0,
-    }
+  // Kick off scan without awaiting — response streams while scan runs
+  ;(async () => {
+    const errors: string[] = []
+    let totalAlerts = 0
 
     try {
-      const result = await rateLimitedSearch(country, {
-        search_text: task.keywords.join(' '),
-        price_from: task.price_min ?? undefined,
-        price_to: task.price_max ?? undefined,
-        order: 'newest_first',
-        per_page: 50,
-      })
+      // Forza la riesecuzione resettando last_scan_at
+      await adminSupabase.from('tasks').update({ last_scan_at: null }).eq('id', params.id)
 
-      log.listings_found = result.items.length
-      summary.listings_found += result.items.length
+      emit({ type: 'start', task_name: task.name, countries: task.countries })
 
-      const newListings = result.items.filter(item => !seenSet.has(`${country}:${item.id}`))
-      log.listings_new = newListings.length
-      summary.listings_new += newListings.length
+      const t = task as Task
 
-      if (result.items.length > 0) {
-        await supabase
-          .from('seen_listings')
-          .upsert(
-            result.items.map(item => ({ task_id: task.id, vinted_id: item.id, country })),
-            { onConflict: 'task_id,vinted_id,country', ignoreDuplicates: true }
-          )
-      }
+      // Carica seen listings
+      emit({ type: 'step', level: 'info', message: 'Caricamento listing già visti dal DB…' })
+      const { data: seenData } = await adminSupabase
+        .from('seen_listings')
+        .select('vinted_id, country')
+        .eq('task_id', t.id)
 
-      // Pre-filtra per qualità venditore (per alert reali)
-      const qualifiedListings = newListings.filter(listing =>
-        listing.user.feedback_reputation >= task.min_seller_rating &&
-        listing.user.feedback_count >= task.min_seller_reviews
+      const seenSet = new Set(
+        (seenData ?? []).map((r: { vinted_id: string; country: string }) => `${r.country}:${r.vinted_id}`)
       )
-      log.listings_qualified = qualifiedListings.length
-      log.listings = []
+      emit({ type: 'step', level: 'info', message: `${seenSet.size} listing già noti (deduplicazione)` })
 
-      // Analisi AI su TUTTI i listing nuovi (qualificati e non) per il log di debug
-      for (const listing of newListings) {
-        summary.listings_analyzed++
-        log.listings_analyzed++
+      for (const country of t.countries as VintedCountry[]) {
+        const cfg = COUNTRY_CONFIGS[country]
+        const countryStart = Date.now()
 
-        const isQualified = qualifiedListings.includes(listing)
-        let filterReason: string | undefined
-        if (!isQualified) {
-          if (listing.user.feedback_reputation < task.min_seller_rating) {
-            filterReason = `rating ${listing.user.feedback_reputation.toFixed(1)} < ${task.min_seller_rating}`
-          } else {
-            filterReason = `recensioni ${listing.user.feedback_count} < ${task.min_seller_reviews}`
+        emit({ type: 'country_start', country, flag: cfg?.flag ?? '🌍' })
+        emit({ type: 'step', level: 'info', message: `Cookie refresh per ${cfg?.name ?? country}…` })
+
+        let result
+        try {
+          emit({ type: 'step', level: 'info', message: `GET ${cfg?.domain}/api/v2/catalog/items?search_text=${t.keywords.join(' ')}` })
+          result = await rateLimitedSearch(country, {
+            search_text: t.keywords.join(' '),
+            price_from: t.price_min ?? undefined,
+            price_to: t.price_max ?? undefined,
+            order: 'newest_first',
+            per_page: 50,
+          })
+          emit({ type: 'step', level: 'success', message: `Vinted ha risposto: ${result.items.length} listing (pag. 1/${result.pagination.total_pages}, totale ${result.pagination.total_entries})` })
+        } catch (err) {
+          const msg = `Vinted API fallita per ${country}: ${err}`
+          emit({ type: 'step', level: 'error', message: msg })
+          errors.push(msg)
+          emit({ type: 'country_done', country, duration_ms: Date.now() - countryStart, alerts: 0 })
+          continue
+        }
+
+        const newListings = result.items.filter(item => !seenSet.has(`${country}:${item.id}`))
+        emit({ type: 'vinted_result', country, found: result.items.length, new_count: newListings.length })
+
+        // Registra come visti
+        if (result.items.length > 0) {
+          await adminSupabase
+            .from('seen_listings')
+            .upsert(
+              result.items.map(item => ({ task_id: t.id, vinted_id: item.id, country })),
+              { onConflict: 'task_id,vinted_id,country', ignoreDuplicates: true }
+            )
+        }
+
+        let countryAlerts = 0
+
+        // Analisi AI su tutti i listing nuovi (qualificati e non) per visibilità debug
+        for (const listing of newListings) {
+          const passedRating = listing.user.feedback_reputation >= t.min_seller_rating
+          const passedReviews = listing.user.feedback_count >= t.min_seller_reviews
+          const passed = passedRating && passedReviews
+
+          let filterReason: string | undefined
+          if (!passedRating) filterReason = `rating ${listing.user.feedback_reputation.toFixed(1)} < ${t.min_seller_rating}`
+          else if (!passedReviews) filterReason = `recensioni ${listing.user.feedback_count} < ${t.min_seller_reviews}`
+
+          emit({ type: 'step', level: 'info', message: `🤖 AI: "${listing.title.slice(0, 50)}" €${listing.price}` })
+
+          let analysis
+          try {
+            analysis = await analyzeListing(listing, t)
+            emit({ type: 'step', level: analysis.score >= t.ai_score_threshold ? 'success' : 'info',
+              message: `   → score ${analysis.score}/10 [${analysis.investment_value}]${!passed ? ` ✗ filtro: ${filterReason}` : ''}` })
+          } catch (err) {
+            emit({ type: 'step', level: 'error', message: `   → AI fallita: ${err}` })
+            analysis = { score: 0, investment_value: 'skip' as const, reasoning: '', highlights: [], warnings: [] }
+          }
+
+          const detail: ListingDetail = {
+            id: listing.id,
+            title: listing.title,
+            price: listing.price,
+            url: listing.url,
+            seller_rating: listing.user.feedback_reputation,
+            seller_reviews: listing.user.feedback_count,
+            passed_filter: passed,
+            filter_reason: filterReason,
+            ai_score: analysis.score,
+            ai_investment_value: analysis.investment_value,
+          }
+          emit({ type: 'listing', detail })
+
+          // Crea alert solo se qualificato e score sufficiente
+          if (!passed) continue
+          if (analysis.score < t.ai_score_threshold || analysis.investment_value === 'skip') {
+            emit({ type: 'step', level: 'info', message: `   → score sotto soglia (${analysis.score} < ${t.ai_score_threshold}), nessun alert` })
+            continue
+          }
+
+          emit({ type: 'step', level: 'success', message: `   → 🎯 ALERT! Salvataggio in DB…` })
+
+          const { data: savedAlert, error: alertError } = await adminSupabase
+            .from('alerts')
+            .insert({
+              task_id: t.id, user_id: t.user_id, vinted_id: listing.id, country,
+              listing_title: listing.title, listing_price: parseFloat(listing.price),
+              listing_currency: listing.currency, listing_url: listing.url,
+              listing_photo_url: listing.photo?.url ?? null,
+              listing_description: listing.description,
+              seller_id: listing.user.id, seller_username: listing.user.login,
+              seller_rating: listing.user.feedback_reputation, seller_reviews: listing.user.feedback_count,
+              ai_score: analysis.score, ai_reasoning: analysis.reasoning,
+              ai_highlights: analysis.highlights, ai_warnings: analysis.warnings,
+              ai_investment_value: analysis.investment_value, telegram_sent: false,
+            })
+            .select().single()
+
+          if (alertError) {
+            emit({ type: 'step', level: 'error', message: `   → Errore salvataggio alert: ${alertError.message}` })
+            continue
+          }
+
+          countryAlerts++
+          totalAlerts++
+
+          if (t.notify_telegram) {
+            const { data: profile } = await adminSupabase
+              .from('profiles').select('telegram_chat_id, telegram_verified').eq('id', t.user_id).single()
+
+            if (profile?.telegram_chat_id && profile?.telegram_verified) {
+              emit({ type: 'step', level: 'info', message: `   → Invio notifica Telegram a chat ${profile.telegram_chat_id}…` })
+              const tgResult = await sendAlert(profile.telegram_chat_id, { ...savedAlert, task: t } as Alert & { task: Task })
+              emit({ type: 'step', level: tgResult.success ? 'success' : 'error',
+                message: tgResult.success ? `   → 📱 Telegram inviato (msg_id: ${tgResult.message_id})` : `   → Telegram fallito: ${tgResult.error}` })
+            } else {
+              emit({ type: 'step', level: 'warn', message: '   → Telegram non configurato o non verificato' })
+            }
           }
         }
 
-        const analysis = await analyzeListing(listing, task)
-
-        const detail: ListingDetail = {
-          id: listing.id,
-          title: listing.title,
-          price: listing.price,
-          url: listing.url,
-          seller_rating: listing.user.feedback_reputation,
-          seller_reviews: listing.user.feedback_count,
-          passed_filter: isQualified,
-          filter_reason: filterReason,
-          ai_score: analysis.score,
-          ai_investment_value: analysis.investment_value,
-        }
-        log.listings.push(detail)
-
-        // Crea alert solo per i listing qualificati con score sufficiente
-        if (!isQualified) continue
-        if (analysis.score < task.ai_score_threshold || analysis.investment_value === 'skip') continue
-
-        const alertData = {
-          task_id: task.id,
-          user_id: task.user_id,
-          vinted_id: listing.id,
-          country,
-          listing_title: listing.title,
-          listing_price: parseFloat(listing.price),
-          listing_currency: listing.currency,
-          listing_url: listing.url,
-          listing_photo_url: listing.photo?.url ?? null,
-          listing_description: listing.description,
-          seller_id: listing.user.id,
-          seller_username: listing.user.login,
-          seller_rating: listing.user.feedback_reputation,
-          seller_reviews: listing.user.feedback_count,
-          ai_score: analysis.score,
-          ai_reasoning: analysis.reasoning,
-          ai_highlights: analysis.highlights,
-          ai_warnings: analysis.warnings,
-          ai_investment_value: analysis.investment_value,
-          telegram_sent: false,
-        }
-
-        const { data: savedAlert, error: alertError } = await supabase
-          .from('alerts')
-          .insert(alertData)
-          .select()
-          .single()
-
-        if (alertError) { console.error('Error saving alert:', alertError); continue }
-
-        log.alerts_created++
-        summary.alerts_sent++
-
-        if (task.notify_telegram) {
-          const { data: profile } = await supabase
-            .from('profiles')
-            .select('telegram_chat_id, telegram_verified')
-            .eq('id', task.user_id)
-            .single()
-
-          if (profile?.telegram_chat_id && profile?.telegram_verified) {
-            const alertWithTask: Alert & { task: Task } = { ...savedAlert, task }
-            await sendAlert(profile.telegram_chat_id, alertWithTask)
-          }
-        }
+        emit({ type: 'country_done', country, duration_ms: Date.now() - countryStart, alerts: countryAlerts })
       }
+
+      // Aggiorna statistiche task
+      await adminSupabase
+        .from('tasks')
+        .update({ last_scan_at: new Date().toISOString(), total_scans: (task as Task).total_scans + 1 })
+        .eq('id', t.id)
+
+      emit({ type: 'done', duration_ms: Date.now() - startTime, total_alerts: totalAlerts, errors })
 
     } catch (err) {
-      log.status = 'error'
-      log.error = String(err)
-      summary.errors.push(`${country}: ${err}`)
+      emit({ type: 'error', message: String(err) })
+    } finally {
+      writer.close()
     }
+  })()
 
-    log.duration_ms = Date.now() - countryStart
-    logs.push(log)
-  }
-
-  await supabase
-    .from('tasks')
-    .update({ last_scan_at: new Date().toISOString(), total_scans: task.total_scans + 1 })
-    .eq('id', task.id)
+  return new Response(stream.readable, {
+    headers: {
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache, no-transform',
+      'X-Accel-Buffering': 'no',
+    },
+  })
 }
