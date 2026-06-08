@@ -34,10 +34,12 @@ export interface Task {
   price_max: number | null
   min_seller_rating: number
   min_seller_reviews: number
+  min_favourites: number
   ai_score_threshold: number
   ai_prompt_extra: string | null
   notify_telegram: boolean
   scan_interval_minutes: number
+  scan_schedule: string | null
   last_scan_at: string | null
   total_scans: number
   total_alerts: number
@@ -79,7 +81,8 @@ export interface Alert {
 export interface VintedListing {
   id: string
   title: string
-  price: string
+  price: string        // valore numerico come stringa, es. "12.50"
+  price_numeric: number
   currency: string
   url: string
   photo: {
@@ -88,6 +91,7 @@ export interface VintedListing {
   } | null
   description: string
   user: VintedUser
+  favourite_count: number
   brand_title?: string
   size_title?: string
   status?: string
@@ -146,9 +150,11 @@ export interface ListingDetail {
   id: string
   title: string
   price: string
+  price_numeric: number
   url: string
   seller_rating: number
   seller_reviews: number
+  favourite_count: number
   passed_filter: boolean
   filter_reason?: string
   ai_score?: number

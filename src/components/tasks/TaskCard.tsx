@@ -4,11 +4,13 @@ import { useState, useEffect, useRef } from 'react'
 import { useRouter } from 'next/navigation'
 import {
   Play, Pause, Trash2, ScanLine, Loader2,
-  ChevronDown, ChevronUp, ExternalLink, Clock,
+  ChevronDown, ChevronUp, ExternalLink, Clock, Edit2,
 } from 'lucide-react'
 import { Card, CardContent } from '@/components/ui/card'
 import { Badge, scoreVariant } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import TaskFormModal from '@/components/tasks/TaskFormModal'
+import { describeCron } from '@/lib/scan/schedule'
 import type { Task, ListingDetail } from '@/types'
 import type { ScanEvent } from '@/app/api/tasks/[id]/scan/route'
 
@@ -263,6 +265,11 @@ export default function TaskCard({ task }: TaskCardProps) {
           <div className="text-right text-xs shrink-0 space-y-0.5">
             <p className="text-gray-400">{task.total_alerts} alert · {task.total_scans} scan</p>
             <p className="text-gray-600">Ultimo: {lastScan}</p>
+            {task.scan_schedule && (
+              <p className="text-blue-500 text-[10px]" title={task.scan_schedule}>
+                🕐 {describeCron(task.scan_schedule)}
+              </p>
+            )}
             {task.is_active && countdown.label && (
               <p className={`flex items-center justify-end gap-1 ${countdown.urgent ? 'text-green-400' : 'text-gray-500'}`}>
                 <Clock size={10} />
@@ -292,7 +299,7 @@ export default function TaskCard({ task }: TaskCardProps) {
         )}
 
         {/* Actions */}
-        <div className="flex items-center gap-2 pt-1">
+        <div className="flex items-center gap-2 pt-1 flex-wrap">
           <Button size="sm" variant="ghost" onClick={handleScan} disabled={scanning || loading !== null}>
             {scanning ? <Loader2 size={14} className="animate-spin" /> : <ScanLine size={14} />}
             {scanning ? 'Scanning…' : 'Scan ora'}
@@ -302,6 +309,16 @@ export default function TaskCard({ task }: TaskCardProps) {
             {loading === 'toggle' ? <Loader2 size={14} className="animate-spin" /> : task.is_active ? <Pause size={14} /> : <Play size={14} />}
             {task.is_active ? 'Pausa' : 'Attiva'}
           </Button>
+
+          <TaskFormModal
+            task={task}
+            trigger={
+              <Button size="sm" variant="secondary" disabled={scanning || loading !== null}>
+                <Edit2 size={14} />
+                Modifica
+              </Button>
+            }
+          />
 
           <Button size="sm" variant="danger" onClick={handleDelete} disabled={scanning || loading !== null} className="ml-auto">
             {loading === 'delete' ? <Loader2 size={14} className="animate-spin" /> : <Trash2 size={14} />}

@@ -12,6 +12,7 @@ import { createAdminClient } from '@/lib/db/client'
 import { rateLimitedSearch } from '@/lib/vinted/client'
 import { analyzeListing } from '@/lib/ai/analyzer'
 import { sendAlert } from '@/lib/notifications/telegram'
+import { isScheduledNow } from '@/lib/scan/schedule'
 import type { Task, ScanSummary, VintedCountry, Alert } from '@/types'
 
 export async function POST(request: NextRequest) {
@@ -77,12 +78,19 @@ async function processTask(
   supabase: any,
   summary: ScanSummary
 ): Promise<void> {
-  // Verifica se è ora di scansionare
+  // Verifica se è ora di scansionare (intervallo minimo)
   if (task.last_scan_at) {
     const lastScan = new Date(task.last_scan_at).getTime()
     const intervalMs = task.scan_interval_minutes * 60 * 1000
     if (Date.now() - lastScan < intervalMs) {
       return // Non ancora il momento
+    }
+  }
+
+  // Verifica schedule CRON (se configurato)
+  if (task.scan_schedule) {
+    if (!isScheduledNow(task.scan_schedule, task.last_scan_at)) {
+      return // Fuori dalla finestra programmata
     }
   }
 
@@ -132,13 +140,12 @@ async function processTask(
           .upsert(seenInserts, { onConflict: 'task_id,vinted_id,country', ignoreDuplicates: true })
       }
 
-      // Pre-filtra per qualità venditore
+      // Pre-filtra per qualità venditore e popolarità
       const qualifiedListings = newListings.filter(listing => {
-        const rating = listing.user.feedback_reputation
-        const reviews = listing.user.feedback_count
         return (
-          rating >= task.min_seller_rating &&
-          reviews >= task.min_seller_reviews
+          listing.user.feedback_reputation >= task.min_seller_rating &&
+          listing.user.feedback_count >= task.min_seller_reviews &&
+          listing.favourite_count >= (task.min_favourites ?? 0)
         )
       })
 

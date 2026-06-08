@@ -51,6 +51,7 @@ export async function POST(request: NextRequest) {
     ai_prompt_extra: body.ai_prompt_extra?.trim() || null,
     notify_telegram: body.notify_telegram ?? true,
     scan_interval_minutes: Number(body.scan_interval_minutes ?? 15),
+    scan_schedule: body.scan_schedule?.trim() || null,
   }
 
   const { data, error } = await supabase
