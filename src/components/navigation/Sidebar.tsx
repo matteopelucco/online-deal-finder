@@ -2,7 +2,7 @@
 
 import Link from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
-import { LayoutDashboard, ListTodo, Shield, LogOut, Radar } from 'lucide-react'
+import { LayoutDashboard, ListTodo, Shield, LogOut, Radar, Settings } from 'lucide-react'
 import { createClient } from '@/lib/db/client-browser'
 
 interface SidebarProps {
@@ -13,6 +13,7 @@ interface SidebarProps {
 const navLinks = [
   { href: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
   { href: '/tasks', label: 'Task', icon: ListTodo },
+  { href: '/settings', label: 'Impostazioni', icon: Settings },
 ]
 
 export default function Sidebar({ isAdmin, userEmail }: SidebarProps) {
