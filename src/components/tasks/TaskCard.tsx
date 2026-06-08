@@ -73,7 +73,9 @@ function renderLine(e: ScanEvent, idx: number) {
           <a href={d.url} target="_blank" rel="noopener noreferrer"
             className="text-gray-300 hover:text-white truncate max-w-[280px]">{d.title}</a>
           <span className="text-gray-500">€{parseFloat(d.price).toFixed(0)}</span>
-          <span className="text-gray-600">⭐{d.seller_rating.toFixed(1)}({d.seller_reviews})</span>
+          <span className="text-gray-600">
+            {d.seller_reputation_available ? `⭐${d.seller_rating.toFixed(1)}(${d.seller_reviews})` : '⭐N/D'}
+          </span>
           <span className="text-gray-600">♥{d.favourite_count}</span>
           {!d.passed_filter && <span className="text-red-700 text-[10px]">[{d.filter_reason}]</span>}
           {scoreEl}
@@ -137,7 +139,9 @@ function ListingsTable({ listings }: { listings: ListingDetail[] }) {
               <span className="text-gray-400 text-right tabular-nums">{parseFloat(item.price).toFixed(0)}</span>
               <span className="text-gray-500 text-right tabular-nums text-[10px]"
                 title={item.filter_reason}>
-                ⭐{item.seller_rating.toFixed(1)}({item.seller_reviews})
+                {item.seller_reputation_available
+                  ? `⭐${item.seller_rating.toFixed(1)}(${item.seller_reviews})`
+                  : '⭐N/D'}
               </span>
               <span className="text-gray-500 text-right tabular-nums">{item.favourite_count}</span>
               <span className={`text-right text-[11px] ${item.passed_filter ? 'text-green-500' : 'text-red-500'}`}>

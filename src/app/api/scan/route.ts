@@ -141,10 +141,12 @@ async function processTask(
       }
 
       // Pre-filtra per qualità venditore e popolarità
+      // I filtri seller si applicano SOLO se Vinted ha restituito i dati di reputazione
       const qualifiedListings = newListings.filter(listing => {
+        const hasRep = listing.user.reputation_available
         return (
-          listing.user.feedback_reputation >= task.min_seller_rating &&
-          listing.user.feedback_count >= task.min_seller_reviews &&
+          (!hasRep || listing.user.feedback_reputation >= task.min_seller_rating) &&
+          (!hasRep || listing.user.feedback_count >= task.min_seller_reviews) &&
           listing.favourite_count >= (task.min_favourites ?? 0)
         )
       })

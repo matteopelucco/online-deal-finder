@@ -268,6 +268,7 @@ function parseSearchResponse(json: Record<string, unknown>, country: VintedCount
     user_keys: Object.keys(fiUser),
     rep_raw: fiUser.feedback_reputation ?? fiUser.account_reputation ?? fiUser.score,
     count_raw: fiUser.feedback_count ?? fiUser.feedbacks_count ?? fiUser.total_reviews,
+    root_keys: Object.keys(json),
   } : undefined
 
   return {
@@ -332,41 +333,46 @@ function parsePrice(item: Record<string, unknown>): number {
 
 function parseCurrency(item: Record<string, unknown>): string {
   if (typeof item.currency === 'string' && item.currency) return item.currency
+  // currency embedded nel price object: { amount: "6.0", currency_code: "EUR" }
+  if (item.price && typeof item.price === 'object') {
+    const cc = (item.price as Record<string, unknown>).currency_code
+    if (typeof cc === 'string' && cc) return cc
+  }
   const tip = item.total_item_price as Record<string, unknown> | null
   return String(tip?.currency_code ?? 'EUR')
 }
 
 /**
  * Parsing robusto del profilo venditore.
- * Vinted usa nomi di campo diversi tra versioni API.
+ *
+ * NOTA: la Vinted catalog API (/api/v2/catalog/items) NON include
+ * dati di reputazione nell'user object degli item. Il campo
+ * reputation_available=false indica che il filtro seller non è applicabile.
  */
 function parseVintedUser(user: Record<string, unknown>): VintedUser {
-  // Reputation: prova tutte le varianti di campo conosciute
-  const rawRep = Number(
-    user.feedback_reputation ??
+  const repRaw = user.feedback_reputation ??
     user.account_reputation ??
     user.avg_review_rating ??
-    user.score ??
-    0
-  )
-  // Scala 0-1 → 0-5. Guard: se già > 1 è già in scala 0-5
-  const rating = rawRep > 0 && rawRep <= 1 ? rawRep * 5 : rawRep
+    user.score
 
-  // Review count: prova varianti
-  const reviewCount = Number(
-    user.feedback_count ??
+  const countRaw = user.feedback_count ??
     user.feedbacks_count ??
     user.total_reviews ??
-    user.review_count ??
-    0
-  )
+    user.review_count
+
+  const reputation_available = repRaw !== undefined && repRaw !== null
+
+  const rawRep = Number(repRaw ?? 0)
+  // Scala 0-1 → 0-5. Guard: se già > 1 è già in scala 0-5
+  const rating = rawRep > 0 && rawRep <= 1 ? rawRep * 5 : rawRep
 
   return {
     id: String(user.id ?? ''),
     login: String(user.login ?? user.username ?? ''),
     feedback_reputation: Math.round(rating * 100) / 100,
-    feedback_count: reviewCount,
+    feedback_count: Number(countRaw ?? 0),
     item_count: user.item_count != null ? Number(user.item_count) : undefined,
+    reputation_available,
   }
 }
 

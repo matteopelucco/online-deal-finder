@@ -91,7 +91,7 @@ export async function POST(
           // Debug struttura raw (primo item) — utile per diagnosi parsing
           if (result._rawDebug) {
             const d = result._rawDebug
-            emit({ type: 'step', level: 'warn', message: `[STRUTTURA API] price_raw=${JSON.stringify(d.price_raw).slice(0, 60)} price_numeric_raw=${JSON.stringify(d.price_numeric_raw)} user_keys=[${d.user_keys.join(',')}] rep_raw=${d.rep_raw} count_raw=${d.count_raw}` })
+            emit({ type: 'step', level: 'warn', message: `[STRUTTURA API] price_raw=${JSON.stringify(d.price_raw).slice(0, 60)} | user_keys=[${d.user_keys.join(',')}] | rep=${d.rep_raw} count=${d.count_raw} | root_keys=[${d.root_keys.join(',')}]` })
           }
         } catch (err) {
           const msg = `Vinted API fallita per ${country}: ${err}`
@@ -118,8 +118,10 @@ export async function POST(
 
         // Analisi AI su tutti i listing nuovi (qualificati e non) per visibilità debug
         for (const listing of newListings) {
-          const passedRating = listing.user.feedback_reputation >= t.min_seller_rating
-          const passedReviews = listing.user.feedback_count >= t.min_seller_reviews
+          // Seller filter: si applica SOLO se Vinted ha restituito i dati di reputazione
+          const hasRep = listing.user.reputation_available
+          const passedRating = !hasRep || listing.user.feedback_reputation >= t.min_seller_rating
+          const passedReviews = !hasRep || listing.user.feedback_count >= t.min_seller_reviews
           const passedFavourites = listing.favourite_count >= (t.min_favourites ?? 0)
           const passed = passedRating && passedReviews && passedFavourites
 
@@ -128,7 +130,10 @@ export async function POST(
           else if (!passedReviews) filterReason = `recensioni ${listing.user.feedback_count} < ${t.min_seller_reviews}`
           else if (!passedFavourites) filterReason = `preferiti ${listing.favourite_count} < ${t.min_favourites}`
 
-          emit({ type: 'step', level: 'info', message: `🤖 AI: "${listing.title.slice(0, 50)}" €${listing.price_numeric.toFixed(2)} ⭐${listing.user.feedback_reputation.toFixed(1)}(${listing.user.feedback_count}) ♥${listing.favourite_count}` })
+          const repStr = listing.user.reputation_available
+            ? `⭐${listing.user.feedback_reputation.toFixed(1)}(${listing.user.feedback_count})`
+            : '⭐N/D'
+          emit({ type: 'step', level: 'info', message: `🤖 AI: "${listing.title.slice(0, 50)}" €${listing.price_numeric.toFixed(2)} ${repStr} ♥${listing.favourite_count}` })
 
           let analysis
           try {
@@ -153,6 +158,7 @@ export async function POST(
             url: listing.url,
             seller_rating: listing.user.feedback_reputation,
             seller_reviews: listing.user.feedback_count,
+            seller_reputation_available: listing.user.reputation_available,
             favourite_count: listing.favourite_count,
             passed_filter: passed,
             filter_reason: filterReason,

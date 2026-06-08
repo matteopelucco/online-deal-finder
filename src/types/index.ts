@@ -101,9 +101,11 @@ export interface VintedListing {
 export interface VintedUser {
   id: string
   login: string
-  feedback_reputation: number  // 0-1 scala Vinted (moltiplicare x5 per scala 0-5)
+  feedback_reputation: number
   feedback_count: number
   item_count?: number
+  /** false quando Vinted non include i dati di reputazione nella risposta catalog */
+  reputation_available: boolean
 }
 
 export interface VintedSearchParams {
@@ -122,13 +124,14 @@ export interface VintedSearchResult {
     total_pages: number
     total_entries: number
   }
-  /** Debug: struttura raw del primo item (solo dev/diagnostica) */
+  /** Debug: struttura raw del primo item (solo diagnostica) */
   _rawDebug?: {
     price_raw: unknown
     price_numeric_raw: unknown
     user_keys: string[]
     rep_raw: unknown
     count_raw: unknown
+    root_keys: string[]
   }
 }
 
@@ -162,6 +165,7 @@ export interface ListingDetail {
   url: string
   seller_rating: number
   seller_reviews: number
+  seller_reputation_available: boolean
   favourite_count: number
   passed_filter: boolean
   filter_reason?: string
