@@ -142,6 +142,19 @@ export interface ScanSummary {
   duration_ms: number
 }
 
+export interface CountryLog {
+  country: string
+  flag: string
+  status: 'ok' | 'error'
+  listings_found: number
+  listings_new: number
+  listings_qualified: number
+  listings_analyzed: number
+  alerts_created: number
+  error?: string
+  duration_ms: number
+}
+
 // ---- API Response types ----
 
 export interface ApiResponse<T> {

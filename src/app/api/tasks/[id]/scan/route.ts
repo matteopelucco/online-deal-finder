@@ -1,10 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { createClient } from '@/lib/db/client'
-import { createAdminClient } from '@/lib/db/client'
+import { createClient, createAdminClient } from '@/lib/db/client'
 import { rateLimitedSearch } from '@/lib/vinted/client'
 import { analyzeListing } from '@/lib/ai/analyzer'
 import { sendAlert } from '@/lib/notifications/telegram'
-import type { Task, ScanSummary, VintedCountry, Alert } from '@/types'
+import { COUNTRY_CONFIGS } from '@/lib/vinted/countries'
+import type { Task, ScanSummary, VintedCountry, Alert, CountryLog } from '@/types'
 
 export async function POST(
   _request: NextRequest,
@@ -14,7 +14,6 @@ export async function POST(
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
-  // Verifica ownership
   const { data: task, error: taskError } = await supabase
     .from('tasks')
     .select('*')
@@ -27,6 +26,12 @@ export async function POST(
   }
 
   const adminSupabase = createAdminClient()
+
+  await adminSupabase
+    .from('tasks')
+    .update({ last_scan_at: null })
+    .eq('id', params.id)
+
   const summary: ScanSummary = {
     tasks_scanned: 0,
     listings_found: 0,
@@ -36,28 +41,22 @@ export async function POST(
     errors: [],
     duration_ms: 0,
   }
-
+  const logs: CountryLog[] = []
   const startTime = Date.now()
 
-  // Forza la scansione resettando last_scan_at
-  await adminSupabase
-    .from('tasks')
-    .update({ last_scan_at: null })
-    .eq('id', params.id)
-
   try {
-    await processTask(task as Task, adminSupabase, summary)
+    await processTask(task as Task, adminSupabase, summary, logs)
   } catch (err) {
     summary.errors.push(String(err))
   }
 
   summary.duration_ms = Date.now() - startTime
 
-  return NextResponse.json({ success: true, summary })
+  return NextResponse.json({ success: true, summary, logs })
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-async function processTask(task: Task, supabase: any, summary: ScanSummary): Promise<void> {
+async function processTask(task: Task, supabase: any, summary: ScanSummary, logs: CountryLog[]): Promise<void> {
   summary.tasks_scanned++
 
   const { data: seenData } = await supabase
@@ -70,6 +69,19 @@ async function processTask(task: Task, supabase: any, summary: ScanSummary): Pro
   )
 
   for (const country of task.countries as VintedCountry[]) {
+    const countryStart = Date.now()
+    const log: CountryLog = {
+      country,
+      flag: COUNTRY_CONFIGS[country]?.flag ?? '🌍',
+      status: 'ok',
+      listings_found: 0,
+      listings_new: 0,
+      listings_qualified: 0,
+      listings_analyzed: 0,
+      alerts_created: 0,
+      duration_ms: 0,
+    }
+
     try {
       const result = await rateLimitedSearch(country, {
         search_text: task.keywords.join(' '),
@@ -79,9 +91,11 @@ async function processTask(task: Task, supabase: any, summary: ScanSummary): Pro
         per_page: 50,
       })
 
+      log.listings_found = result.items.length
       summary.listings_found += result.items.length
 
       const newListings = result.items.filter(item => !seenSet.has(`${country}:${item.id}`))
+      log.listings_new = newListings.length
       summary.listings_new += newListings.length
 
       if (result.items.length > 0) {
@@ -97,11 +111,13 @@ async function processTask(task: Task, supabase: any, summary: ScanSummary): Pro
         listing.user.feedback_reputation >= task.min_seller_rating &&
         listing.user.feedback_count >= task.min_seller_reviews
       )
+      log.listings_qualified = qualifiedListings.length
 
       for (const listing of qualifiedListings) {
         summary.listings_analyzed++
-        const analysis = await analyzeListing(listing, task)
+        log.listings_analyzed++
 
+        const analysis = await analyzeListing(listing, task)
         if (analysis.score < task.ai_score_threshold || analysis.investment_value === 'skip') continue
 
         const alertData = {
@@ -135,6 +151,9 @@ async function processTask(task: Task, supabase: any, summary: ScanSummary): Pro
 
         if (alertError) { console.error('Error saving alert:', alertError); continue }
 
+        log.alerts_created++
+        summary.alerts_sent++
+
         if (task.notify_telegram) {
           const { data: profile } = await supabase
             .from('profiles')
@@ -144,25 +163,19 @@ async function processTask(task: Task, supabase: any, summary: ScanSummary): Pro
 
           if (profile?.telegram_chat_id && profile?.telegram_verified) {
             const alertWithTask: Alert & { task: Task } = { ...savedAlert, task }
-            const result = await sendAlert(profile.telegram_chat_id, alertWithTask)
-
-            if (result.success) {
-              await supabase
-                .from('alerts')
-                .update({
-                  telegram_sent: true,
-                  telegram_message_id: String(result.message_id ?? ''),
-                  telegram_sent_at: new Date().toISOString(),
-                })
-                .eq('id', savedAlert.id)
-              summary.alerts_sent++
-            }
+            await sendAlert(profile.telegram_chat_id, alertWithTask)
           }
         }
       }
+
     } catch (err) {
+      log.status = 'error'
+      log.error = String(err)
       summary.errors.push(`${country}: ${err}`)
     }
+
+    log.duration_ms = Date.now() - countryStart
+    logs.push(log)
   }
 
   await supabase
