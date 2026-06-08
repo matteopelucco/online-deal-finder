@@ -88,6 +88,11 @@ export async function POST(
             per_page: 50,
           })
           emit({ type: 'step', level: 'success', message: `Vinted ha risposto: ${result.items.length} listing (pag. 1/${result.pagination.total_pages}, totale ${result.pagination.total_entries})` })
+          // Debug struttura raw (primo item) — utile per diagnosi parsing
+          if (result._rawDebug) {
+            const d = result._rawDebug
+            emit({ type: 'step', level: 'warn', message: `[STRUTTURA API] price_raw=${JSON.stringify(d.price_raw).slice(0, 60)} price_numeric_raw=${JSON.stringify(d.price_numeric_raw)} user_keys=[${d.user_keys.join(',')}] rep_raw=${d.rep_raw} count_raw=${d.count_raw}` })
+          }
         } catch (err) {
           const msg = `Vinted API fallita per ${country}: ${err}`
           emit({ type: 'step', level: 'error', message: msg })
@@ -128,8 +133,13 @@ export async function POST(
           let analysis
           try {
             analysis = await analyzeListing(listing, t)
-            emit({ type: 'step', level: analysis.score >= t.ai_score_threshold ? 'success' : 'info',
-              message: `   → score ${analysis.score}/10 [${analysis.investment_value}]${!passed ? ` ✗ filtro: ${filterReason}` : ''}` })
+            const skipReason = analysis.investment_value === 'skip'
+              ? 'AI: valore skip'
+              : analysis.score < t.ai_score_threshold
+                ? `score ${analysis.score} < soglia ${t.ai_score_threshold}`
+                : null
+          emit({ type: 'step', level: skipReason ? 'info' : 'success',
+              message: `   → score ${analysis.score}/10 [${analysis.investment_value}]${skipReason ? ` — ${skipReason}` : ''}${!passed ? ` ✗ filtro: ${filterReason}` : ''}` })
           } catch (err) {
             emit({ type: 'step', level: 'error', message: `   → AI fallita: ${err}` })
             analysis = { score: 0, investment_value: 'skip' as const, reasoning: '', highlights: [], warnings: [] }
@@ -153,8 +163,12 @@ export async function POST(
 
           // Crea alert solo se qualificato e score sufficiente
           if (!passed) continue
-          if (analysis.score < t.ai_score_threshold || analysis.investment_value === 'skip') {
-            emit({ type: 'step', level: 'info', message: `   → score sotto soglia (${analysis.score} < ${t.ai_score_threshold}), nessun alert` })
+          if (analysis.investment_value === 'skip') {
+            emit({ type: 'step', level: 'info', message: `   → AI: valore skip, nessun alert` })
+            continue
+          }
+          if (analysis.score < t.ai_score_threshold) {
+            emit({ type: 'step', level: 'info', message: `   → score ${analysis.score} < soglia ${t.ai_score_threshold}, nessun alert` })
             continue
           }
 

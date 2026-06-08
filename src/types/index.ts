@@ -122,6 +122,14 @@ export interface VintedSearchResult {
     total_pages: number
     total_entries: number
   }
+  /** Debug: struttura raw del primo item (solo dev/diagnostica) */
+  _rawDebug?: {
+    price_raw: unknown
+    price_numeric_raw: unknown
+    user_keys: string[]
+    rep_raw: unknown
+    count_raw: unknown
+  }
 }
 
 // ---- AI types ----

@@ -62,34 +62,49 @@ export async function analyzeListing(
 }
 
 function buildUserPrompt(listing: VintedListing, task: Task): string {
-  const sellerRating = listing.user.feedback_reputation.toFixed(1)
-  const priceNote = task.price_min || task.price_max
-    ? `(budget target: ${task.price_min ?? 0}€ - ${task.price_max ?? '∞'}€)`
+  const hasPrice = listing.price_numeric > 0
+  const hasSellerData = listing.user.feedback_reputation > 0 || listing.user.feedback_count > 0
+
+  const priceStr = hasPrice
+    ? `€${listing.price_numeric.toFixed(2)} ${listing.currency}`
+    : 'non disponibile (valuta dal titolo/descrizione)'
+
+  const budgetNote = (task.price_min || task.price_max)
+    ? ` [budget target: €${task.price_min ?? 0}–€${task.price_max ?? '∞'}]`
     : ''
+
+  const sellerStr = hasSellerData
+    ? `Rating ${listing.user.feedback_reputation.toFixed(1)}/5 · ${listing.user.feedback_count} recensioni`
+    : 'Venditore nuovo o dati non disponibili'
 
   return `Analizza questo listing Vinted:
 
 TITOLO: ${listing.title}
-PREZZO: ${listing.price} ${listing.currency} ${priceNote}
+PREZZO: ${priceStr}${budgetNote}
 PAESE: ${listing.country.toUpperCase()}
 DESCRIZIONE: ${listing.description || '(nessuna descrizione)'}
 ${listing.brand_title ? `BRAND: ${listing.brand_title}` : ''}
 ${listing.size_title ? `TAGLIA/FORMATO: ${listing.size_title}` : ''}
 
 VENDITORE:
-- Username: ${listing.user.login}
-- Rating: ${sellerRating}/5
-- Recensioni: ${listing.user.feedback_count}
-${listing.user.item_count ? `- Oggetti venduti: ${listing.user.item_count}` : ''}
+- Username: ${listing.user.login || '(sconosciuto)'}
+- ${sellerStr}
+${listing.user.item_count ? `- Oggetti in vendita: ${listing.user.item_count}` : ''}
 
-POPOLARITÀ: ${listing.favourite_count} utenti hanno aggiunto ai preferiti
+POPOLARITÀ: ${listing.favourite_count} ♥ preferiti
+
+ISTRUZIONI IMPORTANTI:
+- Se il prezzo non è disponibile, basa la valutazione su titolo e descrizione
+- "investment_value: skip" SOLO per: lotti senza prezzo chiaro, condizioni pessime dichiarate, possibili fake evidenti, annunci fuori categoria
+- Un venditore senza recensioni è neutro (nuovo utente), non motivo di skip
+- Concentrati sull'oggetto stesso: è raro? In buone condizioni? Prezzo ragionevole?
 
 Rispondi ESATTAMENTE in questo formato JSON (nessun testo fuori dal JSON):
 {
   "score": <numero 1-10>,
-  "reasoning": "<2-3 frasi perché è interessante o no>",
+  "reasoning": "<2-3 frasi sull'oggetto, basandoti sui dati disponibili>",
   "highlights": ["<punto positivo 1>", "<punto positivo 2>"],
-  "warnings": ["<avviso 1 se presente>"],
+  "warnings": ["<avviso solo se c'è un vero problema>"],
   "investment_value": "<high|medium|low|skip>"
 }`
 }

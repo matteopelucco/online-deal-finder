@@ -217,13 +217,24 @@ export async function searchVinted(
 
 /**
  * Parsa la risposta dell'API Vinted nel formato interno.
+ * Supporta sia items con user embed sia items con user_id + mappa users separata.
  */
 function parseSearchResponse(json: Record<string, unknown>, country: VintedCountry): VintedSearchResult {
-  const items = (json.items as Record<string, unknown>[]) ?? []
+  const rawItems = (json.items as Record<string, unknown>[]) ?? []
   const pagination = (json.pagination as Record<string, unknown>) ?? {}
+  // Mappa users separata (alcune versioni API restituiscono users come dizionario root)
+  const usersMap = (json.users as Record<string, Record<string, unknown>>) ?? {}
 
-  const listings: VintedListing[] = items.map(item => {
-    const user = (item.user as Record<string, unknown>) ?? {}
+  const listings: VintedListing[] = rawItems.map(item => {
+    // Risolvi user: embedded OR lookup in usersMap tramite user_id / user.id
+    let userObj: Record<string, unknown> = {}
+    if (item.user && typeof item.user === 'object') {
+      userObj = item.user as Record<string, unknown>
+    } else {
+      const uid = String(item.user_id ?? '')
+      if (uid && usersMap[uid]) userObj = usersMap[uid]
+    }
+
     const photo = (item.photo as Record<string, unknown>) ?? null
     const priceNumeric = parsePrice(item)
 
@@ -239,7 +250,7 @@ function parseSearchResponse(json: Record<string, unknown>, country: VintedCount
         dominant_color: photo.dominant_color ? String(photo.dominant_color) : undefined,
       } : null,
       description: String(item.description ?? ''),
-      user: parseVintedUser(user),
+      user: parseVintedUser(userObj),
       favourite_count: Number(item.favourite_count ?? item.favourites_count ?? 0),
       brand_title: item.brand_title ? String(item.brand_title) : undefined,
       size_title: item.size_title ? String(item.size_title) : undefined,
@@ -248,6 +259,17 @@ function parseSearchResponse(json: Record<string, unknown>, country: VintedCount
     }
   })
 
+  // Debug info per diagnostica (primo item raw)
+  const fi = rawItems[0]
+  const fiUser = fi ? ((fi.user as Record<string, unknown>) ?? {}) : {}
+  const _rawDebug = fi ? {
+    price_raw: fi.price,
+    price_numeric_raw: fi.price_numeric,
+    user_keys: Object.keys(fiUser),
+    rep_raw: fiUser.feedback_reputation ?? fiUser.account_reputation ?? fiUser.score,
+    count_raw: fiUser.feedback_count ?? fiUser.feedbacks_count ?? fiUser.total_reviews,
+  } : undefined
+
   return {
     items: listings,
     pagination: {
@@ -255,38 +277,54 @@ function parseSearchResponse(json: Record<string, unknown>, country: VintedCount
       total_pages: Number(pagination.total_pages ?? 1),
       total_entries: Number(pagination.total_entries ?? listings.length),
     },
+    _rawDebug,
   }
 }
 
 /**
- * Vinted restituisce il prezzo in formati diversi a seconda della versione API:
- * - stringa: "12.50"
+ * Parsing robusto del prezzo. Vinted usa formati diversi:
+ * - stringa: "12.50" o "12,50" (locale europea)
  * - numero: 12.5
  * - oggetto: { amount: "12.50", currency_code: "EUR" }
- * - campo alternativo: price_numeric, total_item_price
+ * - campo alternativo: price_numeric (float), total_item_price (oggetto)
  */
 function parsePrice(item: Record<string, unknown>): number {
-  // Prova prima price_numeric (campo dedicato sempre numerico)
-  if (typeof item.price_numeric === 'number' && item.price_numeric > 0) {
-    return item.price_numeric
+  // 1. price_numeric (float diretto — più affidabile)
+  const pn = item.price_numeric
+  if (typeof pn === 'number' && isFinite(pn) && pn >= 0) return pn
+  if (typeof pn === 'string') {
+    const n = parseFloat(pn.replace(',', '.'))
+    if (isFinite(n) && n >= 0) return n
   }
 
-  // Prova price
+  // 2. price (stringa, numero, o oggetto)
   const raw = item.price
-  if (typeof raw === 'number') return raw
-  if (typeof raw === 'string') { const n = parseFloat(raw); if (!isNaN(n)) return n }
+  if (typeof raw === 'number' && isFinite(raw)) return raw
+  if (typeof raw === 'string') {
+    const n = parseFloat(raw.replace(',', '.'))
+    if (isFinite(n)) return n
+  }
   if (raw && typeof raw === 'object') {
     const obj = raw as Record<string, unknown>
-    const n = parseFloat(String(obj.amount ?? obj.price ?? '0'))
-    if (!isNaN(n)) return n
+    // { amount: "12.50" } o { amount: 12.5 }
+    const amt = obj.amount ?? obj.value ?? obj.price
+    if (typeof amt === 'number' && isFinite(amt)) return amt
+    if (typeof amt === 'string') {
+      const n = parseFloat(amt.replace(',', '.'))
+      if (isFinite(n)) return n
+    }
   }
 
-  // Prova total_item_price
+  // 3. total_item_price (oggetto annidato)
   const tip = item.total_item_price
   if (tip && typeof tip === 'object') {
     const obj = tip as Record<string, unknown>
-    const n = parseFloat(String(obj.amount ?? '0'))
-    if (!isNaN(n)) return n
+    const amt = obj.amount ?? obj.value
+    if (typeof amt === 'number' && isFinite(amt)) return amt
+    if (typeof amt === 'string') {
+      const n = parseFloat(amt.replace(',', '.'))
+      if (isFinite(n)) return n
+    }
   }
 
   return 0
@@ -298,18 +336,37 @@ function parseCurrency(item: Record<string, unknown>): string {
   return String(tip?.currency_code ?? 'EUR')
 }
 
+/**
+ * Parsing robusto del profilo venditore.
+ * Vinted usa nomi di campo diversi tra versioni API.
+ */
 function parseVintedUser(user: Record<string, unknown>): VintedUser {
-  const rawRep = Number(user.feedback_reputation ?? 0)
-  // Vinted usa scala 0-1 (es. 0.95 = ottimo). Convertiamo a 0-5.
-  // Guard: se già > 1 è già in scala 0-5 (alcune versioni API lo restituiscono così)
-  const rating = rawRep <= 1 ? rawRep * 5 : rawRep
+  // Reputation: prova tutte le varianti di campo conosciute
+  const rawRep = Number(
+    user.feedback_reputation ??
+    user.account_reputation ??
+    user.avg_review_rating ??
+    user.score ??
+    0
+  )
+  // Scala 0-1 → 0-5. Guard: se già > 1 è già in scala 0-5
+  const rating = rawRep > 0 && rawRep <= 1 ? rawRep * 5 : rawRep
+
+  // Review count: prova varianti
+  const reviewCount = Number(
+    user.feedback_count ??
+    user.feedbacks_count ??
+    user.total_reviews ??
+    user.review_count ??
+    0
+  )
 
   return {
     id: String(user.id ?? ''),
-    login: String(user.login ?? ''),
+    login: String(user.login ?? user.username ?? ''),
     feedback_reputation: Math.round(rating * 100) / 100,
-    feedback_count: Number(user.feedback_count ?? 0),
-    item_count: user.item_count ? Number(user.item_count) : undefined,
+    feedback_count: reviewCount,
+    item_count: user.item_count != null ? Number(user.item_count) : undefined,
   }
 }
 
