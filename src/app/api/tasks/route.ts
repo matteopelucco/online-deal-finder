@@ -46,6 +46,7 @@ export async function POST(request: NextRequest) {
     price_max: body.price_max ? Number(body.price_max) : null,
     min_seller_rating: Number(body.min_seller_rating ?? 4.5),
     min_seller_reviews: Number(body.min_seller_reviews ?? 5),
+    min_favourites: Number(body.min_favourites ?? 0),
     ai_score_threshold: Number(body.ai_score_threshold ?? 7),
     ai_prompt_extra: body.ai_prompt_extra?.trim() || null,
     notify_telegram: body.notify_telegram ?? true,

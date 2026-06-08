@@ -82,6 +82,8 @@ VENDITORE:
 - Recensioni: ${listing.user.feedback_count}
 ${listing.user.item_count ? `- Oggetti venduti: ${listing.user.item_count}` : ''}
 
+POPOLARITÀ: ${listing.favourite_count} utenti hanno aggiunto ai preferiti
+
 Rispondi ESATTAMENTE in questo formato JSON (nessun testo fuori dal JSON):
 {
   "score": <numero 1-10>,

@@ -29,6 +29,7 @@ const DEFAULT_FORM = {
   price_max: '',
   min_seller_rating: '4.5',
   min_seller_reviews: '5',
+  min_favourites: '0',
   ai_score_threshold: '7',
   ai_prompt_extra: '',
   notify_telegram: true,
@@ -82,6 +83,7 @@ export default function TaskFormModal() {
           price_max: form.price_max ? parseFloat(form.price_max) : null,
           min_seller_rating: parseFloat(form.min_seller_rating),
           min_seller_reviews: parseInt(form.min_seller_reviews),
+          min_favourites: parseInt(form.min_favourites),
           ai_score_threshold: parseInt(form.ai_score_threshold),
           ai_prompt_extra: form.ai_prompt_extra || null,
           notify_telegram: form.notify_telegram,
@@ -236,6 +238,17 @@ export default function TaskFormModal() {
                 step="1"
                 value={form.min_seller_reviews}
                 onChange={e => set('min_seller_reviews', e.target.value)}
+                disabled={loading}
+              />
+              <Input
+                id="min_favourites"
+                label="Preferiti articolo min ♥"
+                type="number"
+                min="0"
+                step="1"
+                placeholder="0"
+                value={form.min_favourites}
+                onChange={e => set('min_favourites', e.target.value)}
                 disabled={loading}
               />
             </div>

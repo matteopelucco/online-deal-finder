@@ -115,13 +115,15 @@ export async function POST(
         for (const listing of newListings) {
           const passedRating = listing.user.feedback_reputation >= t.min_seller_rating
           const passedReviews = listing.user.feedback_count >= t.min_seller_reviews
-          const passed = passedRating && passedReviews
+          const passedFavourites = listing.favourite_count >= (t.min_favourites ?? 0)
+          const passed = passedRating && passedReviews && passedFavourites
 
           let filterReason: string | undefined
           if (!passedRating) filterReason = `rating ${listing.user.feedback_reputation.toFixed(1)} < ${t.min_seller_rating}`
           else if (!passedReviews) filterReason = `recensioni ${listing.user.feedback_count} < ${t.min_seller_reviews}`
+          else if (!passedFavourites) filterReason = `preferiti ${listing.favourite_count} < ${t.min_favourites}`
 
-          emit({ type: 'step', level: 'info', message: `🤖 AI: "${listing.title.slice(0, 50)}" €${listing.price}` })
+          emit({ type: 'step', level: 'info', message: `🤖 AI: "${listing.title.slice(0, 50)}" €${listing.price_numeric.toFixed(2)} ⭐${listing.user.feedback_reputation.toFixed(1)}(${listing.user.feedback_count}) ♥${listing.favourite_count}` })
 
           let analysis
           try {
@@ -137,9 +139,11 @@ export async function POST(
             id: listing.id,
             title: listing.title,
             price: listing.price,
+            price_numeric: listing.price_numeric,
             url: listing.url,
             seller_rating: listing.user.feedback_reputation,
             seller_reviews: listing.user.feedback_count,
+            favourite_count: listing.favourite_count,
             passed_filter: passed,
             filter_reason: filterReason,
             ai_score: analysis.score,

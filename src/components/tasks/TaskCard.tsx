@@ -72,6 +72,7 @@ function renderLine(e: ScanEvent, idx: number) {
             className="text-gray-300 hover:text-white truncate max-w-[280px]">{d.title}</a>
           <span className="text-gray-500">€{parseFloat(d.price).toFixed(0)}</span>
           <span className="text-gray-600">⭐{d.seller_rating.toFixed(1)}({d.seller_reviews})</span>
+          <span className="text-gray-600">♥{d.favourite_count}</span>
           {!d.passed_filter && <span className="text-red-700 text-[10px]">[{d.filter_reason}]</span>}
           {scoreEl}
         </div>
@@ -115,16 +116,17 @@ function ListingsTable({ listings }: { listings: ListingDetail[] }) {
       {open && (
         <div className="max-h-64 overflow-y-auto">
           <div className="grid px-3 py-1 text-gray-600 font-medium border-b border-gray-800/40"
-            style={{ fontSize: '10px', gridTemplateColumns: '1fr 48px 80px 24px 36px' }}>
+            style={{ fontSize: '10px', gridTemplateColumns: '1fr 48px 80px 36px 24px 36px' }}>
             <span>TITOLO</span><span className="text-right">€</span>
             <span className="text-right">SELLER</span>
+            <span className="text-right">♥</span>
             <span className="text-right">OK</span>
             <span className="text-right">AI</span>
           </div>
           {listings.map(item => (
             <div key={item.id}
               className="grid px-3 py-1 items-center hover:bg-gray-800/30 border-b border-gray-800/20"
-              style={{ fontSize: '11px', gridTemplateColumns: '1fr 48px 80px 24px 36px' }}>
+              style={{ fontSize: '11px', gridTemplateColumns: '1fr 48px 80px 36px 24px 36px' }}>
               <a href={item.url} target="_blank" rel="noopener noreferrer"
                 className="text-gray-300 hover:text-white truncate flex items-center gap-1 min-w-0">
                 <span className="truncate">{item.title}</span>
@@ -135,6 +137,7 @@ function ListingsTable({ listings }: { listings: ListingDetail[] }) {
                 title={item.filter_reason}>
                 ⭐{item.seller_rating.toFixed(1)}({item.seller_reviews})
               </span>
+              <span className="text-gray-500 text-right tabular-nums">{item.favourite_count}</span>
               <span className={`text-right text-[11px] ${item.passed_filter ? 'text-green-500' : 'text-red-500'}`}>
                 {item.passed_filter ? '✓' : '✗'}
               </span>
